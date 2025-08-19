@@ -113,12 +113,6 @@ get_url() {
 # ===== Single request =====
 do_req() {
   local idx="$1"; local target
-  
-  # Check if we've exceeded duration (for duration-based tests)
-  if [[ -n "$END_EPOCH" ]] && (( $(date +%s) >= END_EPOCH )); then
-    return 1  # Exit early if duration exceeded
-  fi
-  
   target=$(get_url)
   local line
   
@@ -240,7 +234,7 @@ producer() {
 export -f do_req get_url producer
 export URL URLS_FILE RESULTS TIMES_FILE CODES_FILE BYTES_FILE ERRORS_FILE VERBOSE
 export METHOD DATA_FILE DATA_INLINE TIMEOUT KEEPALIVE COMPRESS INSECURE HEADERS
-export RPS START_EPOCH DURATION END_EPOCH current_conc
+export RPS START_EPOCH DURATION current_conc
 
 # Show test start info
 if (( DURATION > 0 )); then
