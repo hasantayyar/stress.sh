@@ -240,7 +240,7 @@ producer() {
 export -f do_req get_url producer
 export URL URLS_FILE RESULTS TIMES_FILE CODES_FILE BYTES_FILE ERRORS_FILE VERBOSE
 export METHOD DATA_FILE DATA_INLINE TIMEOUT KEEPALIVE COMPRESS INSECURE HEADERS
-export RPS START_EPOCH DURATION current_conc
+export RPS START_EPOCH DURATION END_EPOCH current_conc
 
 # Show test start info
 if (( DURATION > 0 )); then
@@ -249,29 +249,32 @@ else
   echo "Running ${REQUESTS} requests with ${current_conc} workers against ${URL:-$URLS_FILE}..."
 fi
 
-# Execute the test with proper timeout handling
+# Execute the test with proper duration control
 if (( DURATION > 0 )); then
-  # Use timeout command to enforce duration limit
-  timeout_duration=$((DURATION + 2))
-  timeout_exit_code=0
+  # Start a background timeout process that will kill this script after duration
+  (
+    sleep "$DURATION"
+    echo "Duration limit reached, stopping test..." >&2
+    kill -TERM $$ 2>/dev/null || true
+  ) &
+  timeout_pid=$!
+  
+  # Run the test
   {
-    timeout "${timeout_duration}s" bash << 'EOF' 2>/dev/null
-      producer 0 "$RPS" | xargs -I{} -P "$current_conc" bash -c 'do_req "$@"' _ {}
-EOF
-  }
-  timeout_exit_code=$?
-  if [[ $timeout_exit_code -eq 124 ]]; then
-    echo "Test duration completed (${DURATION}s), generating report..."
-  else
-    echo "Test completed, generating report..."
-  fi
+    producer 0 "$RPS" | xargs -I{} -P "$current_conc" bash -c 'do_req "$@"' _ {}
+  } 2>/dev/null
+  
+  # Clean up timeout process if test completed normally
+  kill $timeout_pid 2>/dev/null || true
+  wait $timeout_pid 2>/dev/null || true
 else
   # For request count mode, no timeout needed
   {
     seq 1 "$REQUESTS" | xargs -I{} -P "$current_conc" bash -c 'do_req "$@"' _ {}
   } 2>/dev/null
-  echo "Test completed, generating report..."
 fi
+
+echo "Test completed, generating report..."
 
 # if interrupted, still fall through to report
 # ===== Reporting helpers =====
