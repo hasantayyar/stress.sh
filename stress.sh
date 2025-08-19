@@ -302,6 +302,78 @@ mean() {
   awk -v t="$total" -v c="$cnt" 'BEGIN{if(c==0){print 0}else{printf("%.6f", t/c)}}'
 }
 
+generate_latency_chart() {
+  local file="$1"
+  
+  # Skip if no data
+  local n=$(wc -l < "$file" | tr -d ' ')
+  if (( n == 0 )); then
+    echo "  (no data)"
+    return
+  fi
+  
+  # Get min and max to determine bucket size
+  local min_val max_val
+  min_val=$(minv "$file")
+  max_val=$(maxv "$file")
+  
+  # Convert to milliseconds for better readability
+  min_ms=$(awk -v v="$min_val" 'BEGIN{printf("%.0f", v*1000)}')
+  max_ms=$(awk -v v="$max_val" 'BEGIN{printf("%.0f", v*1000)}')
+  
+  # Create reasonable bucket size (aim for ~10 buckets)
+  local bucket_size_ms
+  local range_ms=$((max_ms - min_ms))
+  if (( range_ms <= 50 )); then
+    bucket_size_ms=10
+  elif (( range_ms <= 200 )); then
+    bucket_size_ms=25
+  elif (( range_ms <= 500 )); then
+    bucket_size_ms=50
+  elif (( range_ms <= 1000 )); then
+    bucket_size_ms=100
+  else
+    bucket_size_ms=200
+  fi
+  
+  # Create histogram data
+  awk -v bucket_size="$bucket_size_ms" -v min_ms="$min_ms" '
+  NF && $1 != "" {
+    ms = $1 * 1000
+    bucket = int((ms - min_ms) / bucket_size)
+    if (bucket < 0) bucket = 0
+    buckets[bucket]++
+    if (bucket > max_bucket) max_bucket = bucket
+  }
+  END {
+    if (max_bucket == "") max_bucket = 0
+    
+    # Find max count for scaling
+    max_count = 0
+    for (i = 0; i <= max_bucket; i++) {
+      if (buckets[i] > max_count) max_count = buckets[i]
+    }
+    
+    # Print histogram
+    for (i = 0; i <= max_bucket; i++) {
+      count = buckets[i] + 0
+      start_ms = min_ms + (i * bucket_size)
+      end_ms = start_ms + bucket_size - 1
+      
+      # Scale bar length (max 40 chars)
+      bar_length = int((count * 40) / max_count)
+      if (count > 0 && bar_length == 0) bar_length = 1
+      
+      # Create bar
+      bar = ""
+      for (j = 0; j < bar_length; j++) bar = bar "█"
+      
+      printf("  %3d-%3dms [%4d] %s\n", start_ms, end_ms, count, bar)
+    }
+  }
+  ' "$file"
+}
+
 generate_report() {
   local END_TIME ELAPSED
   END_TIME=$(date +%s)
@@ -352,6 +424,9 @@ Latency (s):
   p99=${p99}
   max=${max_t}
   avg=${mean_t}
+
+Response Time Distribution:
+$(generate_latency_chart "$TIMES_FILE")
 
 Bytes:
   total=${bytes_total}
