@@ -251,11 +251,14 @@ fi
 
 # Execute the test with proper duration control
 if (( DURATION > 0 )); then
-  # Start a background timeout process that will kill this script after duration
+  # Start a background timeout process that will stop the test after duration
   (
     sleep "$DURATION"
     echo "Duration limit reached, stopping test..." >&2
-    kill -TERM $$ 2>/dev/null || true
+    # Kill the entire process group to stop all children immediately
+    kill -TERM -$$ 2>/dev/null || kill -TERM $$ 2>/dev/null || true
+    sleep 1
+    kill -KILL -$$ 2>/dev/null || kill -KILL $$ 2>/dev/null || true
   ) &
   timeout_pid=$!
   
