@@ -40,9 +40,15 @@ VERBOSE=false
 # ===== Interrupt handling (Ctrl+C prints partial report) =====
 interrupted=0
 goto_report=0
+dashboard_pid=""
 on_int() {
   interrupted=1
-  echo ""
+  # Stop dashboard first for clean screen
+  if [[ -n "$dashboard_pid" ]]; then
+    kill "$dashboard_pid" 2>/dev/null || true
+  fi
+  # Clear screen
+  echo -e "\033[2J\033[H"
   echo "Stopping test and generating report..." >&2
   # kill all background jobs and child processes
   jobs -p | xargs -r kill 2>/dev/null || true
@@ -230,6 +236,151 @@ producer() {
   echo "start_epoch=$START_EPOCH"
 } > "$META_FILE"
 
+# Real-time dashboard
+show_live_dashboard() {
+  local start_time="$1"
+  local duration="$2"
+  local target_url="$3"
+  local workers="$4"
+  
+  # Terminal control codes
+  local CLEAR_SCREEN=$'\033[2J'
+  local MOVE_TO_TOP=$'\033[H'
+  local HIDE_CURSOR=$'\033[?25l'
+  local SHOW_CURSOR=$'\033[?25h'
+  
+  # Hide cursor for cleaner display
+  echo -n "$HIDE_CURSOR"
+  
+  # Array to store recent response times for mini-chart
+  local recent_times=()
+  local max_recent=20  # Keep last 20 measurements
+  
+  while true; do
+    local current_time=$(date +%s)
+    local elapsed=$((current_time - start_time))
+    
+    # Break if duration exceeded (for duration mode)
+    if [[ "$duration" -gt 0 ]] && (( elapsed >= duration )); then
+      break
+    fi
+    
+    # Read current stats
+    local total_requests=0
+    local ok_requests=0
+    local avg_response_time="0.000"
+    local current_rps="0.00"
+    
+    if [[ -f "$RESULTS" ]] && [[ -s "$RESULTS" ]]; then
+      total_requests=$(wc -l < "$RESULTS" | tr -d ' ')
+      
+      # Calculate success rate
+      if [[ -f "$CODES_FILE" ]] && [[ -s "$CODES_FILE" ]]; then
+        ok_requests=$(grep -E '^[0-9]{3}$' "$CODES_FILE" | awk '$1<500 && $1>=200' | wc -l | tr -d ' ')
+      fi
+      
+      # Calculate current RPS
+      if (( elapsed > 0 )); then
+        current_rps=$(awk -v total="$total_requests" -v elapsed="$elapsed" 'BEGIN{printf("%.2f", total/elapsed)}')
+      fi
+      
+      # Get recent average response time
+      if [[ -f "$TIMES_FILE" ]] && [[ -s "$TIMES_FILE" ]]; then
+        avg_response_time=$(tail -n 10 "$TIMES_FILE" | awk '{sum+=$1; count++} END{if(count>0) printf("%.3f", sum/count); else print "0.000"}')
+        
+        # Store recent response time for chart (in ms)
+        local recent_ms=$(awk -v t="$avg_response_time" 'BEGIN{printf("%.0f", t*1000)}')
+        recent_times+=("$recent_ms")
+        
+        # Keep only recent measurements
+        if (( ${#recent_times[@]} > max_recent )); then
+          recent_times=("${recent_times[@]:1}")
+        fi
+      fi
+    fi
+    
+    # Calculate success rate
+    local success_rate="100.0"
+    if (( total_requests > 0 )); then
+      success_rate=$(awk -v ok="$ok_requests" -v total="$total_requests" 'BEGIN{printf("%.1f", (ok*100.0)/total)}')
+    fi
+    
+    # Progress bar for duration mode
+    local progress_bar=""
+    local progress_percent=0
+    if [[ "$duration" -gt 0 ]]; then
+      progress_percent=$(awk -v elapsed="$elapsed" -v duration="$duration" 'BEGIN{printf("%.0f", (elapsed*100)/duration)}')
+      if (( progress_percent > 100 )); then progress_percent=100; fi
+      
+      local bar_length=40
+      local filled_length=$((progress_percent * bar_length / 100))
+      for ((i=0; i<filled_length; i++)); do progress_bar+="█"; done
+      for ((i=filled_length; i<bar_length; i++)); do progress_bar+="░"; done
+    fi
+    
+    # Generate mini response time chart
+    local mini_chart=""
+    if (( ${#recent_times[@]} > 1 )); then
+      # Find min/max for scaling
+      local min_time=999999 max_time=0
+      for time in "${recent_times[@]}"; do
+        if (( time < min_time )); then min_time=$time; fi
+        if (( time > max_time )); then max_time=$time; fi
+      done
+      
+      # Create mini bars (height 1-8 using block characters)
+      local chart_chars=("▁" "▂" "▃" "▄" "▅" "▆" "▇" "█")
+      for time in "${recent_times[@]}"; do
+        if (( max_time > min_time )); then
+          local normalized=$(( (time - min_time) * 7 / (max_time - min_time) ))
+        else
+          local normalized=0
+        fi
+        mini_chart+="${chart_chars[$normalized]}"
+      done
+    else
+      mini_chart="▁▁▁▁▁▁▁▁▁▁"
+    fi
+    
+    # Clear screen and show dashboard
+    echo -n "${CLEAR_SCREEN}${MOVE_TO_TOP}"
+    
+    cat <<DASHBOARD
+┌─── STRESS TEST LIVE DASHBOARD ───────────────────────────────────────────────┐
+│                                                                               │
+│  Target: ${target_url}                              │
+│  Workers: ${workers}                                               │
+│  Elapsed: ${elapsed}s$(if [[ "$duration" -gt 0 ]]; then echo " / ${duration}s"; fi)                                               │
+│                                                                               │
+├─── PROGRESS ──────────────────────────────────────────────────────────────────┤
+$(if [[ "$duration" -gt 0 ]]; then
+echo "│  [$progress_bar] ${progress_percent}%        │"
+else
+echo "│  Running... (request count mode)                                         │"
+fi)
+│                                                                               │
+├─── METRICS ───────────────────────────────────────────────────────────────────┤
+│  Requests: ${total_requests}                                                │
+│  Success:  ${ok_requests} (${success_rate}%)                                │
+│  RPS:      ${current_rps}                                                │
+│  Avg RT:   ${avg_response_time}s                                               │
+│                                                                               │
+├─── RESPONSE TIME TREND ───────────────────────────────────────────────────────┤
+│  ${mini_chart}                                                │
+│  ▁=fast ████=slow (last ${#recent_times[@]} measurements)                                     │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+Press Ctrl+C to stop test...
+DASHBOARD
+    
+    sleep 1
+  done
+  
+  # Show cursor again
+  echo -n "$SHOW_CURSOR"
+}
+
 # ===== Run =====
 export -f do_req get_url producer
 export URL URLS_FILE RESULTS TIMES_FILE CODES_FILE BYTES_FILE ERRORS_FILE VERBOSE
@@ -243,11 +394,17 @@ else
   echo "Running ${REQUESTS} requests with ${current_conc} workers against ${URL:-$URLS_FILE}..."
 fi
 
+# Start live dashboard in background
+show_live_dashboard "$START_EPOCH" "$DURATION" "${URL:-$URLS_FILE}" "$current_conc" &
+dashboard_pid=$!
+
 # Execute the test with proper duration control
 if (( DURATION > 0 )); then
   # Start a background timeout process that will stop the test after duration
   (
     sleep "$DURATION"
+    # Kill dashboard first for clean exit
+    kill $dashboard_pid 2>/dev/null || true
     echo "Duration limit reached, stopping test..." >&2
     # Kill the entire process group to stop all children immediately
     kill -TERM -$$ 2>/dev/null || kill -TERM $$ 2>/dev/null || true
@@ -271,6 +428,12 @@ else
   } 2>/dev/null
 fi
 
+# Stop the dashboard
+kill $dashboard_pid 2>/dev/null || true
+wait $dashboard_pid 2>/dev/null || true
+
+# Clear screen and show completion message
+echo -e "\033[2J\033[H"
 echo "Test completed, generating report..."
 
 # if interrupted, still fall through to report
