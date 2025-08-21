@@ -345,34 +345,47 @@ show_live_dashboard() {
     # Clear screen and show dashboard
     echo -n "${CLEAR_SCREEN}${MOVE_TO_TOP}"
     
-    cat <<DASHBOARD
-┌─── STRESS TEST LIVE DASHBOARD ───────────────────────────────────────────────┐
-│                                                                               │
-│  Target: ${target_url}                              │
-│  Workers: ${workers}                                               │
-│  Elapsed: ${elapsed}s$(if [[ "$duration" -gt 0 ]]; then echo " / ${duration}s"; fi)                                               │
-│                                                                               │
-├─── PROGRESS ──────────────────────────────────────────────────────────────────┤
-$(if [[ "$duration" -gt 0 ]]; then
-echo "│  [$progress_bar] ${progress_percent}%        │"
-else
-echo "│  Running... (request count mode)                                         │"
-fi)
-│                                                                               │
-├─── METRICS ───────────────────────────────────────────────────────────────────┤
-│  Requests: ${total_requests}                                                │
-│  Success:  ${ok_requests} (${success_rate}%)                                │
-│  RPS:      ${current_rps}                                                │
-│  Avg RT:   ${avg_response_time}s                                               │
-│                                                                               │
-├─── RESPONSE TIME TREND ───────────────────────────────────────────────────────┤
-│  ${mini_chart}                                                │
-│  ▁=fast ████=slow (last ${#recent_times[@]} measurements)                                     │
-│                                                                               │
-└───────────────────────────────────────────────────────────────────────────────┘
-
-Press Ctrl+C to stop test...
-DASHBOARD
+    # Colors for better visual appeal
+    local CYAN='\033[1;36m'
+    local GREEN='\033[1;32m'
+    local YELLOW='\033[1;33m'
+    local BLUE='\033[1;34m'
+    local RESET='\033[0m'
+    local BOLD='\033[1m'
+    local DIM='\033[2m'
+    
+    printf "\n"
+    printf "${CYAN}${BOLD}STRESS TEST LIVE DASHBOARD${RESET}\n"
+    printf "${DIM}═══════════════════════════════════════════════════════════════════════════════${RESET}\n"
+    printf "\n"
+    
+    printf "${BOLD}Target:${RESET}  %s\n" "${target_url}"
+    printf "${BOLD}Workers:${RESET} %s\n" "${workers}"
+    printf "${BOLD}Elapsed:${RESET} %s\n" "${elapsed}s$(if [[ "$duration" -gt 0 ]]; then echo " / ${duration}s"; fi)"
+    printf "\n"
+    
+    printf "${YELLOW}${BOLD}PROGRESS${RESET}\n"
+    if [[ "$duration" -gt 0 ]]; then
+      printf "[${GREEN}%s${RESET}] ${BOLD}%s%%${RESET}\n" "$progress_bar" "$progress_percent"
+    else
+      printf "${YELLOW}Running... (request count mode)${RESET}\n"
+    fi
+    printf "\n"
+    
+    printf "${BLUE}${BOLD}METRICS${RESET}\n"
+    printf "Requests: %s\n" "${total_requests}"
+    printf "Success:  %s (%s%%)\n" "${ok_requests}" "${success_rate}"
+    printf "RPS:      %s\n" "${current_rps}"
+    printf "Avg RT:   %ss\n" "${avg_response_time}"
+    printf "\n"
+    
+    printf "${GREEN}${BOLD}RESPONSE TIME TREND${RESET}\n"
+    printf "%s\n" "${mini_chart}"
+    printf "${DIM}(last %s measurements)${RESET}\n" "${#recent_times[@]}"
+    printf "\n"
+    
+    printf "${DIM}═══════════════════════════════════════════════════════════════════════════════${RESET}\n"
+    printf "${YELLOW}Press Ctrl+C to stop test...${RESET}\n"
     
     sleep 1
   done
